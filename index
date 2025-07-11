@@ -1,0 +1,143 @@
+// Estructura del proyecto:
+// /retoapp
+// ├── backend (Node.js + Express + PostgreSQL)
+// ├── frontend (React)
+// └── db/schema.sql
+
+// ================= BACKEND: Express API =================
+// archivo: /backend/server.js
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const { Pool } = require('pg');
+const app = express();
+const port = 3001;
+
+const pool = new Pool({
+  user: 'postgres',
+  host: 'localhost',
+  database: 'retoapp',
+  password: 'tu_contraseña',
+  port: 5432,
+});
+
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+app.use(cors());
+app.use(express.json());
+
+// Registro de usuario
+app.post('/api/register', async (req, res) => {
+  const { email, password } = req.body;
+  const result = await pool.query('INSERT INTO usuarios (email, password, puntaje) VALUES ($1, $2, 0) RETURNING *', [email, password]);
+  res.json(result.rows[0]);
+});
+
+// Obtener reto aleatorio por dificultad
+app.get('/api/reto-aleatorio/:nivel', async (req, res) => {
+  const { nivel } = req.params;
+  const result = await pool.query('SELECT * FROM retos WHERE dificultad = $1 ORDER BY RANDOM() LIMIT 1', [nivel]);
+  res.json(result.rows[0]);
+});
+
+// Subir evidencia (imagen)
+app.post('/api/subir-evidencia', upload.single('imagen'), async (req, res) => {
+  const { usuario_id, reto_id } = req.body;
+  const imagen = req.file.buffer;
+  const result = await pool.query('INSERT INTO evidencias (usuario_id, reto_id, imagen, validado) VALUES ($1, $2, $3, false) RETURNING *', [usuario_id, reto_id, imagen]);
+  res.json(result.rows[0]);
+});
+
+// Ranking top 100
+app.get('/api/top100', async (req, res) => {
+  const result = await pool.query('SELECT email, puntaje FROM usuarios ORDER BY puntaje DESC LIMIT 100');
+  res.json(result.rows);
+});
+
+app.listen(port, () => console.log(`Servidor en http://localhost:${port}`));
+
+
+// ================= BASE DE DATOS: PostgreSQL =================
+// archivo: /db/schema.sql
+CREATE TABLE usuarios (
+  id SERIAL PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  puntaje INTEGER DEFAULT 0
+);
+
+CREATE TABLE retos (
+  id SERIAL PRIMARY KEY,
+  descripcion TEXT NOT NULL,
+  dificultad TEXT NOT NULL, -- 'facil', 'medio', 'dificil'
+  puntos INTEGER NOT NULL
+);
+
+CREATE TABLE evidencias (
+  id SERIAL PRIMARY KEY,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  reto_id INTEGER REFERENCES retos(id),
+  imagen BYTEA,
+  validado BOOLEAN DEFAULT false
+);
+
+
+// ================= FRONTEND: React =================
+// archivo: /frontend/src/App.jsx
+import React, { useState } from 'react';
+import axios from 'axios';
+
+function App() {
+  const [usuario, setUsuario] = useState(null);
+  const [reto, setReto] = useState(null);
+  const [imagen, setImagen] = useState(null);
+
+  const registrar = async () => {
+    const email = prompt('Correo:');
+    const password = prompt('Contraseña:');
+    const res = await axios.post('http://localhost:3001/api/register', { email, password });
+    setUsuario(res.data);
+  };
+
+  const obtenerReto = async (nivel) => {
+    const res = await axios.get(`http://localhost:3001/api/reto-aleatorio/${nivel}`);
+    setReto(res.data);
+  };
+
+  const subirEvidencia = async () => {
+    const formData = new FormData();
+    formData.append('imagen', imagen);
+    formData.append('usuario_id', usuario.id);
+    formData.append('reto_id', reto.id);
+    await axios.post('http://localhost:3001/api/subir-evidencia', formData);
+    alert('Evidencia enviada');
+  };
+
+  return (
+    <div className="p-4">
+      {!usuario ? (
+        <button onClick={registrar}>Registrarse</button>
+      ) : (
+        <div>
+          <h2>Bienvenido, {usuario.email}</h2>
+          <button onClick={() => obtenerReto('facil')}>Reto fácil</button>
+          <button onClick={() => obtenerReto('medio')}>Reto medio</button>
+          <button disabled>Pagar para reto difícil</button>
+        </div>
+      )}
+
+      {reto && (
+        <div className="mt-4">
+          <h3>Reto asignado:</h3>
+          <p>{reto.descripcion}</p>
+          <input type="file" onChange={(e) => setImagen(e.target.files[0])} />
+          <button onClick={subirEvidencia}>Subir evidencia</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;
+
